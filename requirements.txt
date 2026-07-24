@@ -1,2 +1,2 @@
-# Environment Dependencies
-# List all required python packages here.
+# Runtime dependency for starter-code/prompt_prototype.py.
+google-genai>=1.0.0
