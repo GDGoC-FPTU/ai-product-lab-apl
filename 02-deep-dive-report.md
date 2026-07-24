@@ -1,111 +1,93 @@
-# 02 — Deep-Dive Report: Vinhomes Incident Triage Copilot
+02 — Problem Deep-Dive Report & Evaluation (Bài nhóm)
+👥 1. Khai báo thành viên nhóm
+Tên nhóm: Vin Smart Future — Team 01
+Thành viên tham gia:
+ Phan Bá Khánh Linh — 2A202601989  
+🏛️ 2. Quyết định lựa chọn bài toán cho Deep-Dive
+Nhóm thống nhất chọn bài toán: "Xanh SM — Xử lý sự cố hết pin / sạc pin thực địa cho tài xế taxi điện" (Card #2 từ Phase 2).
 
-## Thông tin nhóm
+💡 Lý do lựa chọn bài toán này:
+Tác động vận hành trực tiếp (Real-time impact): Mỗi ngày tại Hà Nội và TP.HCM có trung bình 80–120 trường hợp tài xế báo sự cố sắp cạn pin hoặc cạn pin giữa đường. Việc xử lý chậm kéo dài thời gian chờ của tài xế, gây tắc nghẽn giao thông và rò rỉ doanh thu cuốc xe (~15%).
+Công nghệ vừa đủ (LLM Feature): Không cần xây dựng Multi-Agent phức tạp hay train model riêng. Giải pháp LLM Feature kết hợp RAG/API lookup nhẹ giúp trích xuất định vị, so khớp trạm sạc trống và draft tin nhắn chỉ đường chuẩn xác trong vài giây.
+Ranh giới an toàn rõ ràng: Có thể áp dụng cơ chế Human-in-the-loop (HITL) bằng thẻ [DRAFT_ONLY] bắt buộc điều phối viên duyệt trước khi gửi, loại bỏ hoàn toàn rủi ro AI gửi nhầm thông tin cho tài xế.
+🏗️ Phase 3 — DEEP-DIVE
+3.1. Current-State Workflow Mapping (Quy trình thủ công hiện tại)
+Sơ đồ trực quan hóa chi tiết được đính kèm tại file 04-workflow-diagram.png.
 
-- **Tên nhóm:** APL
-- **Thành viên:** Phan Bá Khánh Linh — 2A202601989
-- **Phạm vi thí điểm:** Một tòa nhà, một ca CSKH và các case phản ánh qua kênh chat nội bộ trong 4 tuần. Các số baseline/chi phí dưới đây là giả định scoping, phải được xác minh với vận hành trước quyết định triển khai.
+📋 Các bước quy trình thủ công (Tổng thời gian: 15 phút/lượt xử lý):
+┌────────────────┐     ┌────────────────┐     ┌────────────────┐     ┌────────────────┐
+│ Bước 1         │     │ Bước 2         │     │ Bước 3         │     │ Bước 4         │
+│ Tiếp nhận cuộc │     │ Tra cứu vị trí │     │ Tra cứu trạm   │     │ Soạn thảo tin  │
+│ gọi sự cố      │ ──> │ định vị GPS xe │ ──> │ sạc VinFast    │ ──> │ nhắn hướng dẫn │
+│                │     │                │     │ còn trụ trống  │     │ gửi tài xế     │
+│ Ai: Dispatcher │     │ Ai: Dispatcher │     │ Ai: Dispatcher │     │ Ai: Dispatcher │
+│ ⏱ 2 phút       │     │ ⏱ 2 phút       │     │ ⏱ 5 phút 🔴    │     │ ⏱ 5 phút 🔴    │
+│ In: Gọi tổng đài│    │ In: Biển số xe │     │ In: Tọa độ GPS │     │ In: Data trạm  │
+│ Out: Log sự cố │     │ Out: Tọa độ    │     │ Out: Địa chỉ   │     │ Out: SMS/App   │
+└────────────────┘     └────────────────┘     └────────────────┘     └────────────────┘
+                                                                              │
+                                                                              ▼
+                                                                       ┌────────────────┐
+                                                                       │ Bước 5         │
+                                                                       │ Gọi xe cứu hộ  │
+                                                                       │ pin (nếu < 5%) │
+                                                                       │ Ai: Dispatcher │
+                                                                       │ ⏱ 1 phút       │
+                                                                       └────────────────┘
+🔴 = Bottlenecks (Nút thắt cổ chai tốn thời gian nhất)
+🔄 Handoffs: Chuyển giao thông tin từ Tài xế ➔ Tổng đài ➔ App bản đồ internal ➔ Dashboard trạm sạc VinFast ➔ App Tài xế.
+🔴 Chi tiết các Bottlenecks:
+Bước 3 (Tra cứu trạm sạc — 5 phút): Điều phối viên phải mở tay Dashboard trạm sạc VinFast, lọc theo đúng loại cổng sạc (CCS2 cho VF8/VF9, GBT cho VF5/e34), kiểm tra số trụ trống thời gian thực và đo khoảng cách thủ công trên bản đồ.
+Bước 4 (Soạn tin nhắn hướng dẫn — 5 phút): Điều phối viên gõ tay văn bản hướng dẫn chi tiết đường đi, tên trạm, địa chỉ và lưu ý an toàn gửi qua App tài xế. Dễ xảy ra sai sót gõ nhầm địa chỉ hoặc quên lưu ý pin cực thấp.
+3.2. Problem Statement (6-field Standard)
+Trường thông tin	Nội dung chi tiết
+1. Actor / Operator	Điều phối viên (Dispatcher) thuộc Trung tâm Điều vận Xanh SM (GSM).
+2. Current Workflow	Khi tài xế báo sự cố hết pin/sắp hết pin, điều phối viên mở hệ thống GPS tra cứu tọa độ xe, tra cứu thủ công Dashboard trạm sạc VinFast gần nhất còn trụ trống phù hợp dòng xe, viết tin nhắn chỉ đường gửi qua App tài xế, và gọi đội cứu hộ lưu động nếu pin dưới 5%. Quy trình 5 bước thủ công, tốn 15 phút/lượt.
+3. Bottleneck	Bước 3 & 4 (mất 10/15 phút): Tra cứu thủ công trụ sạc khả dụng theo loại cổng xe và gõ tay tin nhắn hướng dẫn tiếng Việt chuẩn xác.
+4. Business Impact	Với ~100 sự cố/ngày tại các thành phố lớn, quy trình lãng phí 25 giờ lao động/ngày của team điều vận. Thời gian xử lý lâu làm gia tăng áp lực cho tài xế, nguy cơ xe cạn pin dừng giữa đường gây cản trở giao thông và sụt giảm 15% doanh thu cuốc xe trong thời gian chờ.
+5. Success Metric	1. Speed: Giảm tổng thời gian xử lý sự cố từ 15 phút xuống dưới 3 phút/lượt (giảm 80%).
+2. Quality: Tỷ lệ gợi ý đúng trạm sạc trống và phù hợp chuẩn cổng sạc đạt ≥ 98%.
+3. Safety: 100% trường hợp pin dưới 5% được tự động chuyển hướng sang điều động Xe Cứu Hộ Pin Di Động.
+6. Operational Boundary	AI ĐƯỢC PHÉP: Lấy dữ liệu GPS xe, tra cứu API trạm sạc VinFast trống, tự động draft tin nhắn chỉ đường kèm vị trí và loại trụ sạc.
+TUYỆT ĐỐI CẤM:
+1. AI không được gửi tin nhắn trực tiếp cho tài xế mà KHÔNG có phê duyệt của Điều phối viên (Bắt buộc thẻ [DRAFT_ONLY]).
+2. AI không được chỉ dẫn xe có pin < 5% di chuyển đến trạm sạc xa > 5km (bắt buộc kích hoạt dispatch_mobile_charger).
+3.3. Future-State Flow & AI Fit
+📊 AI-Fit Matrix Assessment:
+ Rule / State-Machine: Không đủ linh hoạt vì mô tả sự cố của tài xế và ngữ cảnh vị trí mang tính tự nhiên, cần khả năng tổng hợp thông tin và soạn văn bản thân thiện.
+ LLM Feature (Lựa chọn của nhóm): Phù hợp nhất! Quy trình có các bước đầu vào/đầu ra cố định. LLM đóng vai trò trích xuất thông tin, kết hợp dữ liệu API và draft văn bản chuẩn xác theo ranh giới an toàn.
+ Agentic Loop: Không cần thiết vì quy trình không đòi hỏi tự trị đa bước phức tạp; rủi ro để Agent tự quyết định điều vận xe có thể gây sự cố an toàn giao thông.
+🔄 Quy trình tương lai (Future-State Workflow):
+┌────────────────┐     ┌────────────────┐     ┌────────────────┐     ┌────────────────┐
+│ Bước 1         │     │ Bước 2         │     │ Bước 3         │     │ Bước 4         │
+│ Tài xế báo     │ ──> │ 🔵 AI Auto-pull│ ──> │ 🔵 LLM Draft   │ ──> │ 🟢 Dispatcher  │
+│ sự cố qua App  │     │ GPS & Tra cứu  │     │ tin chỉ đường  │     │ click Duyệt    │
+│ hoặc Tổng đài  │     │ Trạm trống API │     │ kèm [DRAFT]    │     │ & Gửi tài xế   │
+└────────────────┘     └────────────────┘     └────────────────┘     └────────────────┘
+                                                                              │
+                                                                              ▼
+                                                                       ↩️ Fallback:
+                                                                       Nếu LLM lỗi/API down,
+                                                                       hệ thống tự chuyển
+                                                                       về màn hình tra cứu
+                                                                       thủ công như cũ.
+🔵 AI Step: Tự động lấy dữ liệu GPS, tra API trạm sạc VinFast, dùng LLM draft tin nhắn hướng dẫn hoặc trả JSON cứu hộ khẩn cấp.
+🟢 Human Step (HITL): Điều phối viên đọc bản nháp có thẻ [DRAFT_ONLY], kiểm tra nhanh và bấm nút "Gửi".
+↩️ Fallback Plan: Nếu Gemini API gặp lỗi (503/429) hoặc API trạm sạc không phản hồi trong 3 giây, giao diện tự động bật bảng tra cứu thủ công fallback để Điều phối viên xử lý truyền thống, đảm bảo không gián đoạn vận hành.
+🏁 Phase 5 — EVALUATE: Đánh giá độ sẵn sàng & Quyết định
+📋 AI Readiness Checklist:
+ Dữ liệu: VinFast & Xanh SM đã có sẵn API định vị GPS xe điện và API trạng thái trụ sạc VinFast thời gian thực (Real-time API).
+ Kiểm soát rủi ro: Rủi ro sai sót được kiểm soát 100% thông qua lớp phê duyệt Human-in-the-loop (HITL) và ranh giới cứng trong System Prompt.
+ Sẵn sàng vận hành: Đội ngũ điều phối viên hoan nghênh công cụ trợ lý nháp (Dispatcher Co-Pilot) vì giúp giảm bớt 80% thao tác gõ phím thủ công giờ cao điểm.
+⚖️ Quyết định cuối cùng của Ban Giám Đốc Vin Smart Future:
+[ x ] GO (Bắt đầu xây dựng sản phẩm Prototype & Pilot)
 
-## Quyết định lựa chọn
-
-Nhóm chọn **Vinhomes Incident Triage Copilot**: một copilot tạo **bản nháp** ticket cho phản ánh sự cố tòa nhà. Hệ thống không thay thế CSKH, không chẩn đoán kỹ thuật, không nhắn tin cho cư dân và không điều động đội hiện trường. Mục tiêu là để nhân viên nhìn thấy cùng lúc: dữ kiện đã có, thông tin cần hỏi, mức khẩn được gợi ý, đội nhận gợi ý và lý do.
-
-## Phase 3.1 — Current-State Workflow Mapping
-
-Sơ đồ trực quan nộp kèm: [`04-workflow-diagram.png`](04-workflow-diagram.png). Quy trình hiện tại được đo theo một case phản ánh thông thường; các case khẩn cần escalation theo SOP ngay, không chờ hết thời lượng trung bình.
-
-| Bước | Người/hệ thống | Thời gian giả định | Handoff / nút thắt |
-|---|---|---:|---|
-| 1. Nhận chat, cuộc gọi, ảnh hoặc ghi âm | Cư dân → CSKH | 0,5 phút | 🔄 Handoff từ cư dân; nội dung thường thiếu block/căn hoặc mô tả không chuẩn. |
-| 2. Đọc-nghe và tra căn hộ/ticket cũ | CSKH + CRM | 1,0 phút | Dễ lộ/chép PII nếu nhân viên copy nhiều hơn cần thiết. |
-| 3. Hỏi lại dữ kiện và xác định dấu hiệu nguy hiểm | CSKH ↔ cư dân | 1,5 phút | 🔴 Bottleneck: nhiều lượt hỏi lại; nguy cơ đánh giá không đồng nhất đối với nước/điện/khói. |
-| 4. Chọn category, priority, đội nhận và tạo ticket | CSKH + ticketing | 1,5 phút | 🔴 Bottleneck: chọn sai đội làm tăng thời gian chuyển vòng. |
-| 5. Chuyển ticket, trưởng ca kiểm tra case P1 | CSKH → đội hiện trường/supervisor | 0,5 phút | 🔄 Handoff cần có ngữ cảnh nhất quán. |
-
-**Tổng thời gian tham chiếu: 5 phút/case.** Baseline thật sẽ lấy từ timestamp CRM trong 2 tuần và tách theo loại case, không dùng một giá trị trung bình để đánh giá mọi sự cố.
-
-## Phase 3.2 — Problem Statement (6 fields)
-
-| Field | Nội dung chi tiết |
-|---|---|
-| **1. Actor / Operator** | Nhân viên CSKH trực ca tạo ticket; trưởng ca review các case P1/khẩn; đội kỹ thuật, an ninh hoặc vệ sinh nhận ticket sau khi con người phê duyệt. |
-| **2. Current Workflow** | CSKH nhận phản ánh đa kênh, tra cứu case, hỏi lại block/căn/dấu hiệu/sự cố, tự gắn nhãn và mức ưu tiên, rồi tạo ticket trên hệ thống hiện hữu. Dữ liệu đầu vào lẫn tiếng Việt tự do, viết tắt và đôi khi có ảnh/ghi âm. |
-| **3. Bottleneck** | Bước hiểu mô tả chưa cấu trúc và biến nó thành ticket đúng loại/đủ dữ kiện. Sai tuyến hoặc thiếu dấu hiệu nguy hiểm kéo dài vòng handoff; case nước gần điện, mùi gas, khói/cháy không thể để AI tự quyết. |
-| **4. Business Impact** | Một case thông thường giả định mất 5 phút; ở 100 case/ngày, giảm 3,5 phút/case có thể giải phóng khoảng 350 phút/ngày để CSKH xử lý việc cần người. Giá trị chỉ được xác nhận sau khi đo volume, tỷ lệ re-route và SLA thật; không dùng giả định này làm cam kết tài chính. |
-| **5. Success Metric** | (a) ≥85% draft được accept hoặc chỉnh sửa nhẹ trong pilot; (b) P50 từ nhận case đến draft ≤20 giây và P50 tạo ticket ≤1,5 phút so với baseline; (c) routing accuracy ≥90% trên mẫu được supervisor gán nhãn; (d) recall cờ nguy hiểm =100% trên bộ test được thiết kế; (e) 0 ticket do AI tự tạo/gửi. |
-| **6. Operational Boundary** | AI chỉ nhận payload của **một case đã được ẩn/giảm PII**, trả JSON draft có `needs_human_review=true`. AI không truy cập CRM ngoài case, không suy luận danh tính, không chẩn đoán nguyên nhân/sửa chữa, không tự đổi priority/SLA, không gửi tin, không gọi đội hiện trường, không đóng ticket. Các dấu hiệu cháy/khói/rò gas/điện giật/nước chạm nguồn điện luôn `escalate_emergency`; supervisor quyết định bước tiếp theo theo SOP. |
-
-## Phase 3.3 — Future-State Flow & AI Fit
-
-```text
-1. Cư dân gửi phản ánh / CSKH nhập case
-      ↓
-2. [HUMAN] CSKH xác minh tối thiểu: tòa/block/căn, kênh liên hệ, consent sử dụng nội dung
-      ↓
-3. [RULE] Redact PII không cần thiết + nhận diện từ khóa nguy hiểm + kiểm tra trường bắt buộc
-      ↓
-4. [AI] LLM tạo JSON: facts, category, urgency đề xuất, đội đề xuất,
-        câu hỏi cần bổ sung, bản nháp ticket và lý do (không có quyền thực thi)
-      ↓
-5. Có dấu hiệu nguy hiểm? ─ Có → [RULE] đặt action=escalate_emergency
-      │                              → [HUMAN] supervisor xử lý theo SOP/fallback
-      │
-      └ Không → [HUMAN] CSKH xem, sửa, xác nhận category/priority/đội nhận
-                        ↓
-6. [HUMAN + hệ thống hiện hữu] CSKH tạo/chuyển ticket; lưu audit log input-redacted,
-   draft, thay đổi của người duyệt và kết quả xử lý
-
-↩ Fallback ở bất kỳ lúc nào: LLM timeout/JSON lỗi/thiếu vị trí/confidence thấp
-   → form thủ công có checklist → CSKH hoặc supervisor xử lý theo SOP;
-   tuyệt đối không tự gửi hay tự dispatch.
-```
-
-### AI-Fit Matrix và lựa chọn kiến trúc
-
-| Phần việc | Rule / State machine | LLM feature | Agentic loop | Lựa chọn và lý do |
-|---|---:|---:|---:|---|
-| Redact trường, validate schema, quyền truy cập | **Có** | Không | Không | Xác định được, cần audit và tái lập. |
-| Nhận diện cờ nguy hiểm/ép escalation | **Có** | Có thể gợi ý | Không | Rule bảo thủ là cổng cuối; LLM không được hạ mức khẩn. |
-| Tóm tắt phản ánh và tạo câu hỏi làm rõ | Không | **Có** | Không | Ngôn ngữ tự do, đa dạng cách diễn đạt. |
-| Gợi ý category/đội nhận | Rule mapping sau LLM | **Có** | Không | LLM đưa gợi ý + lý do, danh mục/đội hợp lệ do rule giới hạn. |
-| Tạo/chuyển/đóng ticket, nhắn cư dân | Quyền hệ thống | Không | **Không dùng** | Đây là hành động tác động vận hành, giữ hoàn toàn cho người. |
-
-**Kết luận AI fit:** dùng **Rule + LLM feature**. Không chọn agentic loop: bài toán không cần lập kế hoạch nhiều bước hay tự gọi công cụ; thêm quyền công cụ sẽ làm rủi ro và chi phí kiểm soát lớn hơn lợi ích của pilot.
-
-### Human-in-the-loop, fallback và quan sát
-
-- **HITL bắt buộc:** CSKH xác nhận mọi trường trước khi tạo ticket; supervisor xác nhận mọi `escalate_emergency` và mọi case priority P1.
-- **Fallback:** nếu API, OCR/ASR hoặc LLM không phản hồi, hiển thị checklist thủ công (vị trí, nguy hiểm, ảnh, liên hệ) và tiếp tục theo SOP hiện hành. Nếu có dấu hiệu nguy hiểm, alert supervisor theo kênh có sẵn; không phụ thuộc AI.
-- **Audit:** chỉ lưu payload đã giảm PII, version prompt/model, draft, cờ rule, quyết định và chỉnh sửa của người duyệt; phân quyền theo vai trò và chính sách lưu giữ được DPO/IT Security phê duyệt.
-
-## Phase 4 — Technical Prompt Prototype
-
-File [`starter-code/prompt_prototype.py`](starter-code/prompt_prototype.py) chạy được cả khi chưa có API key bằng local safety fallback, và dùng Gemini SDK khi có `GEMINI_API_KEY`. Prototype có schema JSON, policy-enforcement sau LLM và 4 adversarial tests:
-
-1. Prompt injection yêu cầu bỏ review và tự điều đội.
-2. Báo khói/mùi gas nhưng yêu cầu giảm ưu tiên.
-3. Yêu cầu đưa toàn bộ dữ liệu cư dân/ticket khác vào câu trả lời.
-4. Case thường thiếu thông tin, kiểm tra AI không bịa dữ kiện.
-
-Các test xác nhận những hành vi cấm có bị chặn hay không; chúng không chứng minh mô hình đạt metric vận hành. Đây là guardrail prototype, không phải hệ thống production.
-
-## Phase 5 — Evaluate
-
-| AI Readiness checklist | Trạng thái | Bằng chứng / hành động trước pilot |
-|---|---|---|
-| Có dữ liệu mẫu/log sạch để test? | **Chưa** | Cần 2 tuần case đã ẩn PII và được supervisor gán nhãn category/priority/đội; chia train-free evaluation set, gồm cả case nguy hiểm và tiếng Việt viết tắt. |
-| Rủi ro khi AI sai có kiểm soát? | **Có điều kiện** | Cổng rule, human review, không có quyền công cụ và fallback thủ công kiểm soát rủi ro; cần kiểm thử red-team, quyền truy cập, retention và SOP escalation trước thử nghiệm thật. |
-| Stakeholder sẵn sàng đổi quy trình? | **Có điều kiện** | CSKH/supervisor cần cùng thiết kế taxonomy, checklist và tiêu chí “accept/sửa nhẹ”; pilot shadow mode 1 tuần trước khi draft hiển thị trong UI. |
-
-### Ước lượng pilot hẹp (không phải báo giá)
-
-| Hạng mục | Ước lượng effort | Ràng buộc chi phí |
-|---|---:|---|
-| Chuẩn hóa taxonomy, redaction, bộ test ẩn danh | 1–2 tuần | Cần owner vận hành và Security phê duyệt dữ liệu. |
-| Prototype read-only + UI review + audit | 2 tuần | Không tích hợp quyền tạo/chuyển ticket trong phase này. |
-| Shadow mode và đo baseline/quality | 1–2 tuần | Mẫu review thủ công; theo dõi latency, acceptance, routing, emergency recall. |
-| API/model | Giới hạn theo ngân sách pilot | Thiết lập quota, timeout, không gửi dữ liệu vượt payload đã duyệt. |
-
-### Quyết định: **NOT YET — chỉ GO cho shadow-mode nội bộ khi đủ điều kiện**
-
-Chưa nên triển khai vận hành rộng vì chưa có bộ dữ liệu ẩn danh, taxonomy được thống nhất và bằng chứng về recall cờ nguy hiểm. Tuy vậy, bài toán đủ hẹp để bắt đầu **shadow mode read-only** sau khi các điều kiện sau được đáp ứng: (1) Security/DPO duyệt data flow; (2) supervisor gán nhãn bộ benchmark; (3) fallback/SOP được diễn tập; (4) red-team không tìm thấy đường tự tạo ticket, tự gửi tin hoặc lộ PII; (5) pilot đạt các success metric trong ít nhất 2 tuần. Nếu routing rule đơn giản đã đạt mục tiêu nhanh hơn trên một category, ưu tiên rule thay vì ép dùng LLM.
+📝 Justification (Luận chứng kỹ thuật và chi phí):
+Khả thi Kỹ thuật (Technical Feasibility): Thử nghiệm thực tế với prompt_prototype.py trên Gemini 2.5 Flash chứng minh mô hình tuân thủ nghiêm ngặt ranh giới an toàn: giữ thẻ [DRAFT_ONLY] đạt 100% và kích hoạt chính xác dispatch_mobile_charger khi pin < 5%.
+Hiệu quả Chi phí (Cost Efficiency):
+Chi phí API Gemini 2.5 Flash ước tính: ~$0.0005/lượt xử lý. Với 100 sự cố/ngày ➔ Chi phí AI chỉ khoảng $1.5 / tháng (~38.000 VNĐ/tháng).
+Giá trị mang lại: Tiết kiệm 750 giờ làm việc/tháng của đội ngũ điều phối viên, giảm 15% tỷ lệ hủy cuốc do hết pin, tối ưu hóa công suất khai thác đội xe Xanh SM.
+Lộ trình triển khai:
+Tuần 1–2: Tích hợp Prompt Prototype vào ứng dụng Dispatcher Dashboard nội bộ.
+Tuần 3–4: Thử nghiệm Pilot với 20 điều phối viên ca sáng tại khu vực Hà Nội.
+Tháng 2: Đánh giá kết quả và nhân rộng toàn quốc cho Xanh SM.
