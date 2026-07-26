@@ -8,12 +8,11 @@
 
 | # | Họ và tên | MSSV | Phần đảm nhận chính |
 |---|---|---|---|
-| 1 | Lâm Việt Hoàng | _[Điền MSSV]_ | Problem Statement + code prompt prototype |
-| 2 | _[Điền họ tên]_ | _[Điền MSSV]_ | Vẽ workflow + Future-State Flow |
-| 3 | _[Điền họ tên]_ | _[Điền MSSV]_ | Phần Evaluate + ráp báo cáo |
-| 4 | _[Điền họ tên]_ | _[Điền MSSV]_ | AI Log + test ranh giới an toàn |
-
-> Nhóm nhớ sửa lại bảng cho khớp số thành viên thật và điền đúng MSSV từng người trước khi push.
+| 1 | Lâm Việt Hoàng | 2A202601067 | Problem Statement + code prompt prototype |
+| 2 | Nguyễn Minh Thu | 2A202601631 | Vẽ workflow + Future-State Flow |
+| 3 | Phạm Tiến Anh | 2A202601594 | Phần Evaluate + ráp báo cáo |
+| 4 | Đoàn Đình Đông | 2A202601900 | AI Log + test ranh giới an toàn |
+| 5 | Phan Linh | _[Điền MSSV]_ | Adversarial tests + review |
 
 ---
 
