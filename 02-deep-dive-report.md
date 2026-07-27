@@ -12,7 +12,7 @@
 | 2 | Nguyễn Minh Thu | 2A202601631 | Vẽ workflow + Future-State Flow |
 | 3 | Phạm Tiến Anh | 2A202601594 | Phần Evaluate + ráp báo cáo |
 | 4 | Đoàn Đình Đông | 2A202601900 | AI Log + test ranh giới an toàn |
-| 5 | Phan Linh | _[Điền MSSV]_ | Adversarial tests + review |
+| 5 | Phan Bá Khánh Linh | 2A202601989 | Adversarial tests + review |
 
 ---
 
